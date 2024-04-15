@@ -4,10 +4,13 @@
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <cmath> 
 #include "use_hmm.h"
 #include "model.h"
 
 using namespace hmm;
+using std::vector;
+using std::log;
 
 void Model::rand_init_param() {
 
@@ -69,24 +72,118 @@ double Model::ln_of_sum(double ln_val1, double ln_val2) {
     return ln_val1 + log((double)1.0 + (double)exp(ln_val2 - ln_val1));
 }
 
-double** Model::alpha(vector<int>* seq_obs){
-    
-    
+double** Model::alpha(vector<int>* seq_obs) {
+    int T = seq_obs->size();
+    double** alpha = new double*[T];
+
+    for (int t = 0; t < T; t++) {
+        alpha[t] = new double[n];
+    }
+    for (int i = 0; i < n; i++) {
+        alpha[0][i] = pi[i] + B[i][(*seq_obs)[0]];
+    }
+
+    for (int t = 1; t < T; t++) {
+        for (int i = 0; i < n; i++) {
+            alpha[t][i] = LOG_MINUS_INFTY;
+            for (int j = 0; j < n; j++) {
+                alpha[t][i] = ln_of_sum(alpha[t][i], alpha[t-1][j] + A[j][i]);
+            }
+            alpha[t][i] += B[i][(*seq_obs)[t]];
+        }
+    }
+
+    return alpha;
 }
 
-double** Model::beta(vector<int>* seq_obs){
-    
+double** Model::beta(vector<int>* seq_obs) {
+    int T = seq_obs->size();
+    double** beta = new double*[T];
+
+    for (int t = 0; t < T; t++) {
+        beta[t] = new double[n];
+    }
+    for (int i = 0; i < n; i++) {
+        beta[T-1][i] = 0; 
+    }
+
+    for (int t = T - 2; t >= 0; t--) {
+        for (int i = 0; i < n; i++) {
+            beta[t][i] = LOG_MINUS_INFTY;
+            for (int j = 0; j < n; j++) {
+                beta[t][i] = ln_of_sum(beta[t][i], A[i][j] + B[j][(*seq_obs)[t+1]] + beta[t+1][j]);    }
+        }
+    }
+
+    return beta;
 }
 
-vector<int>* Model::viterbi(vector<int>* seq_obs)
-{
-    
+vector<int>* Model::viterbi(vector<int>* seq_obs) {
+    int T = seq_obs->size(); 
+    vector<int>* seq_etat = new vector<int>(T); 
+    vector<vector<double>> q(T, vector<double>(n));
+    vector<vector<int>> psi(T, vector<int>(n));
+
+    for (int i = 0; i < n; i++) {
+        q[0][i] = pi[i] + B[i][(*seq_obs)[0]];
+        psi[0][i] = 0;
+    }
+
+    for (int t = 1; t < T; t++) {
+        for (int j = 0; j < n; j++) {
+            double max_val = -std::numeric_limits<double>::infinity();
+            int max_etat;
+            for (int i = 0; i < n; i++) {
+                double val = q[t-1][i] + A[i][j];
+                if (val > max_val) {
+                    max_val = val;
+                    max_etat = i;
+                }
+            }
+            q[t][j] = max_val + B[j][(*seq_obs)[t]];
+            psi[t][j] = max_etat;
+        }
+    }
+
+    double max_prob = -std::numeric_limits<double>::infinity();
+    int der_etat;
+    for (int i = 0; i < n; i++) {
+        if (q[T-1][i] > max_prob) {
+            max_prob = q[T-1][i];
+            der_etat = i;
+        }
+    }
+
+    (*seq_etat)[T-1] = der_etat;
+    for (int t = T - 2; t >= 0; t--) {
+        (*seq_etat)[t] = psi[t+1][(*seq_etat)[t+1]];
+    }
+
+    return seq_etat;
 }
 
-vector<double>* Model::posterior(vector<int>* seq_obs, vector<int>* seq_state) 
-{
-    
+
+vector<double>* Model::posterior(vector<int>* seq_obs, vector<int>* seq_state) {
+    int T = seq_obs->size();
+    vector<double>* alBe = new vector<double>(T);
+    double** alpha = this->alpha(seq_obs);
+    double** beta = this->beta(seq_obs);
+    double pgen = this->pgen(seq_obs, alpha);
+
+    for (int t = 0; t < T; t++) {
+        (*alBe)[t] = alpha[t][(*seq_state)[t]] + beta[t][(*seq_state)[t]] - pgen;
+    }
+
+    for (int t = 0; t < T; t++) {
+        delete[] alpha[t];
+        delete[] beta[t];
+    }
+    delete[] alpha;
+    delete[] beta;
+
+    return alBe;
 }
+
 
 vector<vector<int>*>* Model::predict(vector<vector<int>*>* data_obs) 
 {
@@ -96,9 +193,13 @@ vector<vector<int>*>* Model::predict(vector<vector<int>*>* data_obs)
     return res;
 }
 
-double Model::pgen(vector<int>* seq_obs, double** alpha) 
-{
-    
+double Model::pgen(vector<int>* seq_obs, double** alpha) {
+    int T = seq_obs->size();
+    double pgen = LOG_MINUS_INFTY;
+    for (int i = 0; i < n; i++) {
+        pgen = ln_of_sum(pgen, alpha[T-1][i]);
+    }
+    return pgen;
 }
 
 double*** Model::xi(vector<int>* seq_obs, double* likelihood) 
@@ -304,11 +405,49 @@ void Model::train_MLE(vector<vector<int>*>* data_obs, vector<vector<int>*>* data
     // count pairs s_{i}o_{j}
     int count_state_obs[n][M];
 
+ fill_n(count_start_state, n, 0);
+    for (int i = 0; i < n; i++) {
+        fill_n(count_bigram_state[i], n, 0);
+        fill_n(count_state_obs[i], M, 0);
+        count_unigram_state[i] = 0;
+    }
 
+    for (size_t seq_idx = 0; seq_idx < data_obs->size(); seq_idx++) {
+        vector<int>* obs_seq = (*data_obs)[seq_idx];
+        vector<int>* state_seq = (*data_state)[seq_idx];
 
+        count_start_state[(*state_seq)[0]]++;
 
+        for (size_t i = 0; i < state_seq->size(); i++) {
+            count_state_obs[(*state_seq)[i]][(*obs_seq)[i]]++;
 
-    init_param_EOS();
+            if (i < state_seq->size() - 1) {
+                count_bigram_state[(*state_seq)[i]][(*state_seq)[i + 1]]++;
+                count_unigram_state[(*state_seq)[i]]++;
+            }
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        pi[i] = log(static_cast<double>(count_start_state[i]) / data_obs->size());
+
+        for (int j = 0; j < n; j++) {
+            if (count_unigram_state[i] == 0) {
+                A[i][j] = LOG_MINUS_INFTY; 
+            } else {
+                A[i][j] = log(static_cast<double>(count_bigram_state[i][j]) / count_unigram_state[i]);
+            }
+        }
+
+        for (int k = 0; k < M; k++) {
+            if (count_unigram_state[i] == 0) {
+                B[i][k] = LOG_MINUS_INFTY;
+            } else {
+                B[i][k] = log(static_cast<double>(count_state_obs[i][k]) / count_unigram_state[i]);
+            }
+        }
+    }
+
     save_hmm(filename);
 }
 

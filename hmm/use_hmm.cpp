@@ -234,8 +234,8 @@ void Parser::write_predict(string filename, Model* model, queue<string>* unk_obs
                     {
                         filout << model->tab_obs[(*obs_seq1)[i]];
                     }
-                    // filout << "\t" << model->tab_state[(*state_seq1)[i]] << "\t" << exp((*posteriors)[i]) << endl;
-                    filout << "\t" << model->tab_state[(*state_seq1)[i]] << endl;
+                    filout << "\t" << model->tab_state[(*state_seq1)[i]] << "\t" << exp((*posteriors)[i]) << endl;
+                    // filout << "\t" << model->tab_state[(*state_seq1)[i]] << endl;
                 }
             }
             filout << endl;
